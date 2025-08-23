@@ -311,7 +311,7 @@ function findChrome() {
   return null;
 }
 
-// 🎯 ENHANCED SINGLE ACCOUNT SCRAPER WITH CHRONOLOGICAL SORTING
+// Enhanced single account scraper function
 async function scrapeSingleAccount(page, username, tweetsPerAccount = 3, scrapeId) {
   const cleanUsername = username.replace('@', '');
   const profileURL = `https://x.com/${cleanUsername}`;
@@ -370,71 +370,37 @@ async function scrapeSingleAccount(page, username, tweetsPerAccount = 3, scrapeI
       throw new Error(`No tweets found for @${cleanUsername} - Account may be private or protected`);
     }
 
-    // 🔄 ENHANCED SCROLLING STRATEGY FOR CHRONOLOGICAL COLLECTION
-    console.log(`🔄 [${scrapeId}] Implementing enhanced scrolling strategy...`);
-    
-    // First, scroll to top to ensure we start fresh
+    // Wait for content to stabilize
+    await new Promise(resolve => setTimeout(resolve, 3000));
+
+    // Scroll to top for freshest content
+    console.log(`📍 [${scrapeId}] Scrolling to top for freshest content...`);
     await page.evaluate(() => window.scrollTo(0, 0));
     await new Promise(resolve => setTimeout(resolve, 2000));
 
-    // Progressive scrolling to collect more tweets for better chronological sorting
-    // We'll collect more tweets than needed, then sort and filter
-    const targetTweets = tweetsPerAccount * 3; // Collect 3x more for better selection
-    let previousTweetCount = 0;
-    let stableCount = 0;
-    const maxScrolls = 8; // Limit scrolls to prevent infinite loops
-    
-    for (let scroll = 0; scroll < maxScrolls; scroll++) {
-      // Scroll down gradually
-      await page.evaluate(() => {
-        window.scrollBy(0, window.innerHeight * 0.8);
-      });
-      
-      // Wait for content to load
-      await new Promise(resolve => setTimeout(resolve, 3000));
-      
-      // Check how many tweets we have now
-      const currentTweetCount = await page.evaluate(() => {
-        return document.querySelectorAll('article').length;
-      });
-      
-      console.log(`📊 [${scrapeId}] Scroll ${scroll + 1}: Found ${currentTweetCount} articles`);
-      
-      // If we have enough tweets or count is stable, break
-      if (currentTweetCount >= targetTweets) {
-        console.log(`✅ [${scrapeId}] Collected enough articles (${currentTweetCount}), stopping scroll`);
-        break;
-      }
-      
-      // Check if we're getting new content
-      if (currentTweetCount === previousTweetCount) {
-        stableCount++;
-        if (stableCount >= 2) {
-          console.log(`⚠️ [${scrapeId}] No new content after ${stableCount} scrolls, stopping`);
-          break;
-        }
-      } else {
-        stableCount = 0;
-      }
-      
-      previousTweetCount = currentTweetCount;
+    // Light scrolling to load more tweets
+    console.log(`🔄 [${scrapeId}] Loading more tweets...`);
+    for (let i = 0; i < 3; i++) {
+      await page.evaluate(() => window.scrollBy(0, window.innerHeight));
+      await new Promise(resolve => setTimeout(resolve, 2000));
     }
-
-    // Go back to top for consistent processing
+    
+    // Go back to top
     await page.evaluate(() => window.scrollTo(0, 0));
     await new Promise(resolve => setTimeout(resolve, 2000));
 
-    // 🎯 ENHANCED TWEET EXTRACTION WITH CHRONOLOGICAL SORTING
-    console.log(`🎯 [${scrapeId}] Extracting and sorting tweets chronologically...`);
+    // Extract tweets with enhanced pinned detection
+    console.log(`🎯 [${scrapeId}] Extracting tweets...`);
     const tweets = await page.evaluate((username, tweetsPerAccount, scrapeId) => {
       const tweetData = [];
       const articles = document.querySelectorAll('article');
       const now = new Date();
+      const freshnessDays = 7; // Allow tweets up to 7 days old
+      const cutoffDate = new Date(now.getTime() - (freshnessDays * 24 * 60 * 60 * 1000));
 
       console.log(`Found ${articles.length} articles to process for ${username}`);
 
-      // First pass: Extract all valid tweets with timestamps
-      for (let i = 0; i < articles.length; i++) {
+      for (let i = 0; i < articles.length && tweetData.length < tweetsPerAccount; i++) {
         const article = articles[i];
         try {
           // Skip promoted content
@@ -444,19 +410,39 @@ async function scrapeSingleAccount(page, username, tweetsPerAccount = 3, scrapeI
 
           // Enhanced pinned tweet detection
           const isPinned = (
+            // Direct pin indicators
             article.querySelector('[data-testid="pin"]') ||
             article.querySelector('svg[data-testid="pin"]') ||
             article.querySelector('[aria-label*="Pinned"]') ||
             article.querySelector('[aria-label*="pinned"]') ||
             article.querySelector('[data-testid="socialContext"]')?.textContent?.toLowerCase().includes('pinned') ||
+            
+            // Text-based detection
             article.textContent.toLowerCase().includes('pinned tweet') ||
             article.textContent.toLowerCase().includes('pinned') ||
             article.innerHTML.toLowerCase().includes('pin') ||
+            
+            // Icon-based detection
             article.querySelector('svg title')?.textContent?.toLowerCase().includes('pin') ||
             article.querySelector('[role="img"][aria-label*="pin"]') ||
+            
+            // Parent container checks
             article.closest('[data-testid*="pin"]') ||
             article.querySelector('[class*="pin" i]') ||
-            article.querySelector('[data-testid="socialContext"]')?.querySelector('svg')
+            
+            // Social context checks (where pin info usually appears)
+            article.querySelector('[data-testid="socialContext"]')?.querySelector('svg') ||
+            
+            // Additional heuristics for first tweet
+            (i === 0 && (() => {
+              const timeElement = article.querySelector('time');
+              if (!timeElement) return false;
+              const timestamp = timeElement.getAttribute('datetime');
+              if (!timestamp) return false;
+              const tweetAge = now - new Date(timestamp);
+              // If first tweet is more than 7 days old, likely pinned
+              return tweetAge > (7 * 24 * 60 * 60 * 1000);
+            })())
           );
           
           if (isPinned) {
@@ -481,50 +467,30 @@ async function scrapeSingleAccount(page, username, tweetsPerAccount = 3, scrapeI
           const tweetId = link.match(/status\/(\d+)/)?.[1];
           if (!tweetId) continue;
 
-          // 📅 ENHANCED TIMESTAMP PARSING
+          // Get timestamp
           const timeElement = article.querySelector('time');
-          let timestamp = null;
-          let parsedDate = null;
+          let timestamp = timeElement ? timeElement.getAttribute('datetime') : null;
           const relativeTime = timeElement ? timeElement.innerText.trim() : '';
 
-          // Try to get absolute timestamp first
-          if (timeElement && timeElement.getAttribute('datetime')) {
-            timestamp = timeElement.getAttribute('datetime');
-            parsedDate = new Date(timestamp);
-          }
-          
-          // If no absolute timestamp, parse relative time with better accuracy
+          // Parse relative time if no absolute timestamp
           if (!timestamp && relativeTime) {
-            const relativeMatch = relativeTime.toLowerCase();
-            
-            if (relativeMatch.includes('s') || relativeMatch.includes('now')) {
-              parsedDate = new Date();
-            } else if (relativeMatch.includes('m')) {
+            if (relativeTime.includes('s') || relativeTime.toLowerCase().includes('now')) {
+              timestamp = new Date().toISOString();
+            } else if (relativeTime.includes('m')) {
               const mins = parseInt(relativeTime) || 1;
-              parsedDate = new Date(now.getTime() - mins * 60000);
-            } else if (relativeMatch.includes('h')) {
+              timestamp = new Date(now.getTime() - mins * 60000).toISOString();
+            } else if (relativeTime.includes('h')) {
               const hours = parseInt(relativeTime) || 1;
-              parsedDate = new Date(now.getTime() - hours * 3600000);
-            } else if (relativeMatch.includes('d')) {
+              timestamp = new Date(now.getTime() - hours * 3600000).toISOString();
+            } else if (relativeTime.includes('d')) {
               const days = parseInt(relativeTime) || 1;
-              parsedDate = new Date(now.getTime() - days * 86400000);
-            } else {
-              // Try to parse other formats like "Jan 15", "Dec 2023", etc.
-              try {
-                parsedDate = new Date(relativeTime);
-                if (isNaN(parsedDate.getTime())) {
-                  // Fallback to current time if parsing fails
-                  parsedDate = new Date();
-                }
-              } catch (e) {
-                parsedDate = new Date();
-              }
+              timestamp = new Date(now.getTime() - days * 86400000).toISOString();
             }
-            
-            timestamp = parsedDate.toISOString();
           }
 
-          if (!parsedDate || isNaN(parsedDate.getTime())) continue;
+          if (!timestamp) continue;
+          const tweetDate = new Date(timestamp);
+          if (isNaN(tweetDate.getTime()) || tweetDate < cutoffDate) continue;
 
           // Get user info
           const userElement = article.querySelector('[data-testid="User-Names"] a, [data-testid="User-Name"] a');
@@ -554,10 +520,8 @@ async function scrapeSingleAccount(page, username, tweetsPerAccount = 3, scrapeI
             retweets: getMetric('retweet'),
             replies: getMetric('reply'),
             timestamp,
-            parsedDate: parsedDate.getTime(), // For sorting
             relativeTime,
-            scraped_at: new Date().toISOString(),
-            position_found: i // Track original position for debugging
+            scraped_at: new Date().toISOString()
           };
           
           tweetData.push(tweetObj);
@@ -567,72 +531,31 @@ async function scrapeSingleAccount(page, username, tweetsPerAccount = 3, scrapeI
         }
       }
 
-      // 📊 CHRONOLOGICAL SORTING - Most recent first
-      console.log(`📊 [${scrapeId}] Sorting ${tweetData.length} tweets chronologically...`);
-      const sortedTweets = tweetData.sort((a, b) => b.parsedDate - a.parsedDate);
+      // Sort by timestamp (newest first)
+      const sortedTweets = tweetData.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
       
-      // 🔍 FRESHNESS FILTERING - Only keep recent tweets
-      const freshnessDays = 7; // Allow tweets up to 7 days old
-      const cutoffTime = now.getTime() - (freshnessDays * 24 * 60 * 60 * 1000);
-      
-      const freshTweets = sortedTweets.filter(tweet => tweet.parsedDate > cutoffTime);
-      
-      // 🎯 DEDUPLICATION - Remove duplicates by tweet ID
-      const uniqueTweets = [];
-      const seenIds = new Set();
-      
-      for (const tweet of freshTweets) {
-        if (!seenIds.has(tweet.id)) {
-          seenIds.add(tweet.id);
-          uniqueTweets.push(tweet);
-        }
-      }
-      
-      // Take only the requested number of most recent tweets
-      const finalTweets = uniqueTweets.slice(0, tweetsPerAccount);
-      
-      console.log(`✅ [${scrapeId}] Final result: ${finalTweets.length} tweets (from ${tweetData.length} total found)`);
-      
-      // Clean up the parsedDate field from final output
-      return finalTweets.map(tweet => {
-        const { parsedDate, ...cleanTweet } = tweet;
-        return cleanTweet;
-      });
-      
+      console.log(`Extracted ${sortedTweets.length} tweets for ${username}`);
+      return sortedTweets;
     }, cleanUsername, tweetsPerAccount, scrapeId);
 
-    // 🔍 FINAL VALIDATION - Ensure we have the most recent tweets
-    const validatedTweets = tweets.filter(tweet => {
-      const tweetDate = new Date(tweet.timestamp);
-      const isValid = !isNaN(tweetDate.getTime());
-      
-      if (!isValid) {
-        console.log(`⚠️ [${scrapeId}] Filtering out tweet with invalid timestamp: ${tweet.id}`);
-      }
-      
-      return isValid;
-    });
+    // Filter out very old tweets as final safeguard (configurable freshness)
+    const freshnessDays = process.env.TWEET_FRESHNESS_DAYS || 7; // Default 7 days instead of 1
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - freshnessDays);
 
-    // Sort once more to be absolutely sure (client-side validation)
-    const finalSortedTweets = validatedTweets.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-
-    console.log(`🎉 [${scrapeId}] Successfully extracted ${finalSortedTweets.length} chronologically sorted tweets for @${cleanUsername}`);
-    
-    // 📅 Log tweet ages for debugging
-    if (finalSortedTweets.length > 0) {
-      const now = new Date();
-      console.log(`📅 [${scrapeId}] Tweet ages:`);
-      finalSortedTweets.forEach((tweet, idx) => {
-        const age = Math.round((now - new Date(tweet.timestamp)) / (1000 * 60)); // minutes
-        console.log(`   ${idx + 1}. ${age}m ago: "${tweet.text.substring(0, 50)}..."`);
-      });
-    }
+    const finalTweets = tweets
+      .filter(t => {
+        const tweetAge = new Date() - new Date(t.timestamp);
+        const isOld = tweetAge > (freshnessDays * 24 * 60 * 60 * 1000);
+        return !isOld;
+      })
+      .slice(0, tweetsPerAccount);
 
     return {
       success: true,
       username: cleanUsername,
-      tweets: finalSortedTweets,
-      count: finalSortedTweets.length
+      tweets: finalTweets,
+      count: finalTweets.length
     };
 
   } catch (error) {
@@ -653,7 +576,7 @@ app.get('/', (req, res) => {
   const stats = browserPool.getStats();
   
   res.json({ 
-    status: 'Enhanced Twitter Scraper - Multi-Account + Browser Pool + Chronological Sorting', 
+    status: 'Enhanced Twitter Scraper - Multi-Account + Browser Pool + Concurrency Protection', 
     chrome: chromePath || 'default',
     browser_pool: stats,
     timestamp: new Date().toISOString(),
@@ -661,12 +584,9 @@ app.get('/', (req, res) => {
       'Browser Pool Optimization',
       'Multi-Account Scraping', 
       'Concurrency Protection',
-      'Enhanced Chronological Sorting',
       'Enhanced Pinned Tweet Detection',
       'Rate Limit Protection',
-      'Instance Isolation',
-      'Freshness Filtering',
-      'Tweet Deduplication'
+      'Instance Isolation'
     ]
   });
 });
@@ -712,7 +632,7 @@ app.post('/scrape-multiple', async (req, res) => {
   const scrapeId = crypto.randomBytes(6).toString('hex');
   const startTime = Date.now();
   
-  console.log(`\n🚀 [${scrapeId}] Starting multi-account scrape for ${accounts.length} accounts with chronological sorting`);
+  console.log(`\n🚀 [${scrapeId}] Starting multi-account scrape for ${accounts.length} accounts`);
 
   let pageId, page;
   try {
@@ -759,8 +679,7 @@ app.post('/scrape-multiple', async (req, res) => {
       performance: {
         total_time_ms: totalTime,
         browser_reused: true,
-        instance_id: browserPool.instanceId,
-        chronological_sorting: true
+        instance_id: browserPool.instanceId
       },
       browser_pool: browserPool.getStats(),
       summary: {
@@ -783,8 +702,7 @@ app.post('/scrape-multiple', async (req, res) => {
       performance: {
         total_time_ms: totalTime,
         browser_reused: true,
-        instance_id: browserPool.instanceId,
-        chronological_sorting: true
+        instance_id: browserPool.instanceId
       },
       suggestion: error.message.includes('concurrent scrapes') ? 
         'Another scraping operation is in progress. Please try again in a moment.' :
@@ -839,8 +757,7 @@ app.post('/scrape', async (req, res) => {
           scraped_at: data.scraped_at,
           profile_url: searchURL,
           performance: data.performance,
-          browser_pool: data.browser_pool,
-          chronological_sorting: true
+          browser_pool: data.browser_pool
         };
         resolve();
         return originalJson.call(res, singleResponse);
@@ -867,7 +784,7 @@ app.post('/scrape-user', async (req, res) => {
   const cleanUsername = username.replace(/^@/, '');
   const profileURL = `https://x.com/${cleanUsername}`;
   
-  console.log(`🎯 Scraping user: @${cleanUsername} with chronological sorting`);
+  console.log(`🎯 Scraping user: @${cleanUsername}`);
   
   // Forward to single account endpoint
   req.body.url = profileURL;
@@ -902,7 +819,7 @@ app.post('/scrape-batch', async (req, res) => {
   const batchId = crypto.randomBytes(8).toString('hex');
   const startTime = Date.now();
   
-  console.log(`\n🔄 [${batchId}] Starting batch processing of ${accounts.length} accounts in batches of ${batchSize} with chronological sorting`);
+  console.log(`\n🔄 [${batchId}] Starting batch processing of ${accounts.length} accounts in batches of ${batchSize}`);
 
   try {
     const allResults = [];
@@ -981,8 +898,7 @@ app.post('/scrape-batch', async (req, res) => {
       performance: {
         total_time_ms: totalTime,
         batches_processed: Math.ceil(accounts.length / batchSize),
-        instance_id: browserPool.instanceId,
-        chronological_sorting: true
+        instance_id: browserPool.instanceId
       },
       summary: {
         successful_accounts: totalSuccessful,
@@ -1003,8 +919,7 @@ app.post('/scrape-batch', async (req, res) => {
       timestamp: new Date().toISOString(),
       performance: {
         total_time_ms: totalTime,
-        instance_id: browserPool.instanceId,
-        chronological_sorting: true
+        instance_id: browserPool.instanceId
       }
     });
   }
@@ -1033,12 +948,6 @@ app.get('/stats', (req, res) => {
     browser_pool: stats,
     chrome_path: findChrome() || 'default',
     cookies_configured: !!process.env.TWITTER_COOKIES,
-    features: {
-      chronological_sorting: true,
-      enhanced_pinned_detection: true,
-      freshness_filtering: true,
-      tweet_deduplication: true
-    },
     timestamp: new Date().toISOString()
   });
 });
@@ -1046,7 +955,7 @@ app.get('/stats', (req, res) => {
 // Initialize browser pool on startup
 async function startServer() {
   try {
-    console.log('🔥 Initializing enhanced browser pool with chronological sorting...');
+    console.log('🔥 Initializing enhanced browser pool...');
     await browserPool.initialize();
     
     app.listen(PORT, '0.0.0.0', () => {
@@ -1054,19 +963,17 @@ async function startServer() {
       console.log(`🔍 Chrome executable:`, findChrome() || 'default');
       console.log(`🍪 Cookies configured:`, !!process.env.TWITTER_COOKIES);
       console.log(`🔥 Browser pool ready with instance ID: ${browserPool.instanceId}`);
-      console.log(`⚡ Features: Browser Pool + Multi-Account + Chronological Sorting + Concurrency Protection`);
+      console.log(`⚡ Features: Browser Pool + Multi-Account + Concurrency Protection`);
       console.log(`📊 Max concurrent scrapes: ${browserPool.maxConcurrentScrapes}`);
       console.log(`📄 Max pages: ${browserPool.maxPages}`);
-      console.log(`🎯 NEW: Enhanced chronological sorting for accounts with frequent posts`);
       console.log(`\n📡 Available Endpoints:`);
       console.log(`  GET  /          - Health check & status`);
       console.log(`  GET  /stats     - Detailed server & browser stats`);
-      console.log(`  POST /scrape    - Single account scraping (with chronological sorting)`);
-      console.log(`  POST /scrape-user - User-friendly single account (with chronological sorting)`);
-      console.log(`  POST /scrape-multiple - Multi-account scraping (up to 10, with chronological sorting)`);
-      console.log(`  POST /scrape-batch    - Batch processing (up to 50, with chronological sorting)`);
+      console.log(`  POST /scrape    - Single account scraping`);
+      console.log(`  POST /scrape-user - User-friendly single account`);
+      console.log(`  POST /scrape-multiple - Multi-account scraping (up to 10)`);
+      console.log(`  POST /scrape-batch    - Batch processing (up to 50)`);
       console.log(`  POST /restart-browser - Restart browser pool`);
-      console.log(`\n🎯 Enhanced for profiles like @solflare that post multiple times daily!`);
     });
   } catch (error) {
     console.error('💥 Failed to start server:', error.message);
