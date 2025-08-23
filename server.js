@@ -395,7 +395,8 @@ async function scrapeSingleAccount(page, username, tweetsPerAccount = 3, scrapeI
       const tweetData = [];
       const articles = document.querySelectorAll('article');
       const now = new Date();
-      const thirtyDaysAgo = new Date(now.getTime() - (30 * 24 * 60 * 60 * 1000));
+      const freshnessDays = 7; // Allow tweets up to 7 days old
+      const cutoffDate = new Date(now.getTime() - (freshnessDays * 24 * 60 * 60 * 1000));
 
       console.log(`Found ${articles.length} articles to process for ${username}`);
 
@@ -489,7 +490,7 @@ async function scrapeSingleAccount(page, username, tweetsPerAccount = 3, scrapeI
 
           if (!timestamp) continue;
           const tweetDate = new Date(timestamp);
-          if (isNaN(tweetDate.getTime()) || tweetDate < thirtyDaysAgo) continue;
+          if (isNaN(tweetDate.getTime()) || tweetDate < cutoffDate) continue;
 
           // Get user info
           const userElement = article.querySelector('[data-testid="User-Names"] a, [data-testid="User-Name"] a');
@@ -537,14 +538,15 @@ async function scrapeSingleAccount(page, username, tweetsPerAccount = 3, scrapeI
       return sortedTweets;
     }, cleanUsername, tweetsPerAccount, scrapeId);
 
-    // Filter out very old tweets as final safeguard
+    // Filter out very old tweets as final safeguard (configurable freshness)
+    const freshnessDays = process.env.TWEET_FRESHNESS_DAYS || 7; // Default 7 days instead of 1
     const cutoff = new Date();
-    cutoff.setDate(cutoff.getDate() - 1); // 1 day cutoff for freshness
+    cutoff.setDate(cutoff.getDate() - freshnessDays);
 
     const finalTweets = tweets
       .filter(t => {
         const tweetAge = new Date() - new Date(t.timestamp);
-        const isOld = tweetAge > (24 * 60 * 60 * 1000); // More than 24 hours
+        const isOld = tweetAge > (freshnessDays * 24 * 60 * 60 * 1000);
         return !isOld;
       })
       .slice(0, tweetsPerAccount);
