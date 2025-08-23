@@ -99,12 +99,51 @@ async function scrapeSingleAccount(page, username, tweetsPerAccount = 3) {
             continue;
           }
 
-          // Skip pinned tweets
-          if (article.querySelector('[data-testid="pin"]') || 
-              article.textContent.includes('Pinned Tweet') ||
-              article.querySelector('svg[data-testid="pin"]')) {
-            console.log('Skipping pinned tweet');
+          // Skip pinned tweets - Enhanced detection
+          const isPinned = (
+            article.querySelector('[data-testid="pin"]') ||
+            article.querySelector('svg[data-testid="pin"]') ||
+            article.querySelector('[aria-label*="Pinned"]') ||
+            article.querySelector('[data-testid="socialContext"]')?.textContent?.includes('Pinned') ||
+            article.textContent.includes('Pinned Tweet') ||
+            article.textContent.includes('Pinned') ||
+            article.innerHTML.includes('pin') ||
+            article.innerHTML.includes('Pin') ||
+            // Check for pinned icon in various forms
+            article.querySelector('svg title')?.textContent?.toLowerCase().includes('pin') ||
+            article.querySelector('[role="img"][aria-label*="pin"]') ||
+            // Check parent containers for pin indicators
+            article.closest('[data-testid*="pin"]') ||
+            // Look for specific pin-related classes or attributes
+            article.querySelector('[class*="pin"]') ||
+            article.querySelector('[class*="Pin"]')
+          );
+          
+          if (isPinned) {
+            console.log('🔒 Skipping pinned tweet for', username);
             continue;
+          }
+          
+          // Additional check: Skip if this is at the very top and looks like it might be pinned
+          // (Pinned tweets are usually the first tweet on a profile)
+          if (i === 0 && tweetData.length === 0) {
+            // Double check for any pin indicators we might have missed
+            const possiblePinIndicators = [
+              'pinned', 'pin', 'Pin', 'PINNED', 'PIN'
+            ];
+            
+            const fullText = article.textContent.toLowerCase();
+            const fullHTML = article.innerHTML.toLowerCase();
+            
+            const mightBePinned = possiblePinIndicators.some(indicator => 
+              fullText.includes(indicator.toLowerCase()) || 
+              fullHTML.includes(indicator.toLowerCase())
+            );
+            
+            if (mightBePinned) {
+              console.log('🔒 Skipping potential pinned tweet (first tweet with pin indicators)');
+              continue;
+            }
           }
           
           // Get tweet text
