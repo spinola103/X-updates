@@ -11,28 +11,33 @@ const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
 
-// 🔥 ENHANCED BROWSER POOL WITH CONCURRENCY PROTECTION
-class EnhancedBrowserPool {
+// 🔥 OPTIMIZED BROWSER POOL WITH ENHANCED STABILITY
+class OptimizedBrowserPool {
   constructor() {
     this.browser = null;
-    this.pages = new Map(); // Track pages with their usage
-    this.maxPages = 3;
+    this.pages = new Map();
+    this.maxPages = 4; // Increased for better concurrency
     this.isInitializing = false;
     this.lastHealthCheck = Date.now();
     this.cookiesLoaded = false;
-    this.instanceId = crypto.randomBytes(8).toString('hex'); // Unique instance ID
-    this.activeScrapes = new Set(); // Track active scraping operations
-    this.maxConcurrentScrapes = 2; // Limit concurrent scrapes to prevent conflicts
+    this.instanceId = crypto.randomBytes(8).toString('hex');
+    this.activeScrapes = new Set();
+    this.maxConcurrentScrapes = 3; // Optimized for better throughput
+    this.requestCount = 0;
+    this.successCount = 0;
     
-    // Auto health check every 5 minutes
-    setInterval(() => this.healthCheck(), 5 * 60 * 1000);
+    // Auto health check every 3 minutes for better monitoring
+    setInterval(() => this.healthCheck(), 3 * 60 * 1000);
+    
+    // Auto cleanup every 10 minutes
+    setInterval(() => this.cleanupStalePages(), 10 * 60 * 1000);
   }
 
   async initialize() {
     if (this.isInitializing) {
       console.log('⏳ Browser initialization already in progress...');
       while (this.isInitializing) {
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        await new Promise(resolve => setTimeout(resolve, 500));
       }
       return this.browser;
     }
@@ -40,6 +45,8 @@ class EnhancedBrowserPool {
     if (this.browser && !this.browser.isConnected()) {
       console.log('🔄 Browser disconnected, reinitializing...');
       this.browser = null;
+      this.pages.clear();
+      this.activeScrapes.clear();
     }
 
     if (this.browser) {
@@ -57,7 +64,7 @@ class EnhancedBrowserPool {
         args: [
           '--no-sandbox',
           '--single-process',
-          '--max_old_space_size=512',
+          '--max_old_space_size=768', // Increased memory
           '--disable-setuid-sandbox',
           '--disable-dev-shm-usage',
           '--disable-accelerated-2d-canvas',
@@ -69,22 +76,32 @@ class EnhancedBrowserPool {
           '--disable-renderer-backgrounding',
           '--disable-features=TranslateUI',
           '--disable-ipc-flooding-protection',
-          '--window-size=1366,768',
+          '--window-size=1920,1080', // Better resolution for content loading
           '--memory-pressure-off',
           '--disable-blink-features=AutomationControlled',
           '--disable-web-security',
           '--disable-features=VizDisplayCompositor',
-          // Use unique user data dir to prevent conflicts between instances
-          `--user-data-dir=/tmp/chrome-pool-data-${this.instanceId}`
+          '--disable-features=VizServiceDisplayCompositor',
+          '--disable-logging',
+          '--disable-permissions-api',
+          '--disable-notifications',
+          '--disable-default-apps',
+          '--disable-extensions',
+          '--disable-plugins',
+          '--disable-images', // Speed optimization - don't load images
+          '--aggressive-cache-discard',
+          `--user-data-dir=/tmp/chrome-pool-${this.instanceId}`
         ],
-        defaultViewport: { width: 1366, height: 768 }
+        defaultViewport: { width: 1920, height: 1080 },
+        ignoreDefaultArgs: ['--enable-automation', '--enable-blink-features=IdleDetection'],
+        ignoreHTTPSErrors: true
       };
 
       if (chromePath) {
         launchOptions.executablePath = chromePath;
       }
 
-      console.log(`🚀 Launching new browser instance [${this.instanceId}]...`);
+      console.log(`🚀 Launching optimized browser instance [${this.instanceId}]...`);
       this.browser = await puppeteer.launch(launchOptions);
       
       this.browser.on('disconnected', () => {
@@ -110,24 +127,34 @@ class EnhancedBrowserPool {
   }
 
   async acquirePage(scrapeId) {
-    // Check concurrent scrape limit
+    this.requestCount++;
+    
+    // Enhanced concurrency check
     if (this.activeScrapes.size >= this.maxConcurrentScrapes) {
-      throw new Error(`Maximum concurrent scrapes (${this.maxConcurrentScrapes}) reached. Please try again in a moment.`);
+      console.log(`⚠️ Max concurrent scrapes (${this.maxConcurrentScrapes}) reached, queuing request...`);
+      
+      let waitTime = 0;
+      while (this.activeScrapes.size >= this.maxConcurrentScrapes && waitTime < 60000) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        waitTime += 1000;
+      }
+      
+      if (this.activeScrapes.size >= this.maxConcurrentScrapes) {
+        throw new Error(`Server busy. Maximum concurrent scrapes (${this.maxConcurrentScrapes}) reached. Please try again in a moment.`);
+      }
     }
 
     const browser = await this.initialize();
     
+    // Wait for available page slot
+    let waitCount = 0;
+    while (this.pages.size >= this.maxPages && waitCount < 30) {
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      waitCount++;
+    }
+    
     if (this.pages.size >= this.maxPages) {
-      console.log('⚠️ Max pages reached, waiting for available page...');
-      let waitCount = 0;
-      while (this.pages.size >= this.maxPages && waitCount < 30) {
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        waitCount++;
-      }
-      
-      if (this.pages.size >= this.maxPages) {
-        throw new Error('Browser pool exhausted. Please try again later.');
-      }
+      throw new Error('Browser pool exhausted. Please try again later.');
     }
 
     const page = await browser.newPage();
@@ -142,32 +169,58 @@ class EnhancedBrowserPool {
     
     this.activeScrapes.add(scrapeId);
     
-    // Configure page
-    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36');
+    // Enhanced page configuration for Twitter
+    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
     await page.setCacheEnabled(false);
     
+    // Enhanced headers to mimic real browser
     await page.setExtraHTTPHeaders({ 
       'Accept-Language': 'en-US,en;q=0.9',
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
       'Cache-Control': 'no-cache',
+      'Pragma': 'no-cache',
       'Upgrade-Insecure-Requests': '1',
-      'X-Instance-Id': this.instanceId // Help identify this instance in logs
+      'Sec-Fetch-Dest': 'document',
+      'Sec-Fetch-Mode': 'navigate',
+      'Sec-Fetch-Site': 'none',
+      'Sec-Fetch-User': '?1',
+      'DNT': '1'
     });
 
-    // Clear storage on new page
+    // Enhanced stealth measures
     await page.evaluateOnNewDocument(() => {
+      // Clear storage
       try {
         localStorage.clear();
         sessionStorage.clear();
       } catch (e) {}
+      
+      // Override navigator properties to avoid detection
+      Object.defineProperty(navigator, 'webdriver', {
+        get: () => undefined,
+      });
+      
+      // Remove automation indicators
+      delete window.chrome;
+      window.chrome = {
+        runtime: {}
+      };
+      
+      // Override permissions
+      const originalQuery = window.navigator.permissions.query;
+      window.navigator.permissions.query = (parameters) => (
+        parameters.name === 'notifications' ?
+          Promise.resolve({ state: Notification.permission }) :
+          originalQuery(parameters)
+      );
     });
 
-    // Load cookies if not already loaded for this browser instance
+    // Load cookies with better error handling
     if (!this.cookiesLoaded && process.env.TWITTER_COOKIES) {
       await this.loadCookies(page);
     }
 
-    console.log(`📄 Created page ${pageId} for scrape ${scrapeId} (${this.pages.size}/${this.maxPages} active, ${this.activeScrapes.size} concurrent scrapes)`);
+    console.log(`📄 Created page ${pageId} for scrape ${scrapeId} (${this.pages.size}/${this.maxPages} active, ${this.activeScrapes.size} concurrent)`);
     return { pageId, page };
   }
 
@@ -177,10 +230,12 @@ class EnhancedBrowserPool {
 
       let cookies;
       
-      if (process.env.TWITTER_COOKIES.trim().startsWith('[') || process.env.TWITTER_COOKIES.trim().startsWith('{')) {
-        cookies = JSON.parse(process.env.TWITTER_COOKIES);
+      // Support multiple cookie formats
+      const cookieString = process.env.TWITTER_COOKIES.trim();
+      if (cookieString.startsWith('[') || cookieString.startsWith('{')) {
+        cookies = JSON.parse(cookieString);
       } else {
-        console.log('⚠️ TWITTER_COOKIES appears to be in string format');
+        console.log('⚠️ TWITTER_COOKIES appears to be in string format, skipping...');
         return false;
       }
       
@@ -188,16 +243,34 @@ class EnhancedBrowserPool {
         if (typeof cookies === 'object' && cookies.name) {
           cookies = [cookies];
         } else {
+          console.log('⚠️ Invalid cookie format');
           return false;
         }
       }
       
-      const validCookies = cookies.filter(cookie => 
-        cookie.name && cookie.value && cookie.domain
-      );
+      // Enhanced cookie validation
+      const validCookies = cookies.filter(cookie => {
+        const hasRequired = cookie.name && cookie.value && cookie.domain;
+        const isTwitterDomain = cookie.domain.includes('twitter.com') || 
+                               cookie.domain.includes('x.com') || 
+                               cookie.domain.includes('.twitter.com') ||
+                               cookie.domain.includes('.x.com');
+        return hasRequired && isTwitterDomain;
+      });
       
       if (validCookies.length > 0) {
-        await page.setCookie(...validCookies);
+        // Set cookies for both domains
+        const twitterCookies = validCookies.map(cookie => ({
+          ...cookie,
+          domain: '.twitter.com'
+        }));
+        
+        const xCookies = validCookies.map(cookie => ({
+          ...cookie,
+          domain: '.x.com'
+        }));
+        
+        await page.setCookie(...twitterCookies, ...xCookies);
         this.cookiesLoaded = true;
         console.log(`✅ ${validCookies.length} cookies loaded to browser pool [${this.instanceId}]`);
         return true;
@@ -222,7 +295,20 @@ class EnhancedBrowserPool {
     
     this.pages.delete(pageId);
     this.activeScrapes.delete(scrapeId);
-    console.log(`📄 Released page ${pageId} for scrape ${scrapeId} (${this.pages.size}/${this.maxPages} active, ${this.activeScrapes.size} concurrent scrapes)`);
+    console.log(`📄 Released page ${pageId} for scrape ${scrapeId} (${this.pages.size}/${this.maxPages} active)`);
+  }
+
+  async cleanupStalePages() {
+    const now = Date.now();
+    const staleThreshold = 15 * 60 * 1000; // 15 minutes
+    
+    for (const [pageId, pageInfo] of this.pages.entries()) {
+      const age = now - pageInfo.created;
+      if (age > staleThreshold) {
+        console.log(`🧹 Cleaning up stale page ${pageId} (${Math.round(age/60000)} minutes old)`);
+        await this.releasePage(pageId, pageInfo.scrapeId);
+      }
+    }
   }
 
   async healthCheck() {
@@ -230,18 +316,9 @@ class EnhancedBrowserPool {
     
     try {
       const version = await this.browser.version();
-      console.log(`💊 Health check passed [${this.instanceId}] - Browser version: ${version}`);
+      console.log(`💊 Health check passed [${this.instanceId}] - Browser: ${version}`);
+      console.log(`📊 Requests: ${this.requestCount}, Success: ${this.successCount}, Rate: ${Math.round((this.successCount/this.requestCount)*100)}%`);
       this.lastHealthCheck = Date.now();
-      
-      // Clean up stale pages (older than 10 minutes)
-      const now = Date.now();
-      for (const [pageId, pageInfo] of this.pages.entries()) {
-        const age = now - pageInfo.created;
-        if (age > 10 * 60 * 1000) { // 10 minutes
-          console.log(`🧹 Cleaning up stale page ${pageId} (${Math.round(age/60000)} minutes old)`);
-          await this.releasePage(pageId, pageInfo.scrapeId);
-        }
-      }
       
     } catch (error) {
       console.error('💥 Health check failed:', error.message);
@@ -264,12 +341,13 @@ class EnhancedBrowserPool {
     this.pages.clear();
     this.cookiesLoaded = false;
     this.activeScrapes.clear();
-    
-    // Generate new instance ID to avoid conflicts
     this.instanceId = crypto.randomBytes(8).toString('hex');
     
-    // Reinitialize
     await this.initialize();
+  }
+
+  incrementSuccess() {
+    this.successCount++;
   }
 
   getStats() {
@@ -281,6 +359,9 @@ class EnhancedBrowserPool {
       active_scrapes: this.activeScrapes.size,
       max_concurrent_scrapes: this.maxConcurrentScrapes,
       cookies_loaded: this.cookiesLoaded,
+      requests_total: this.requestCount,
+      requests_successful: this.successCount,
+      success_rate: this.requestCount > 0 ? `${Math.round((this.successCount/this.requestCount)*100)}%` : '0%',
       last_health_check: new Date(this.lastHealthCheck).toISOString(),
       uptime_minutes: Math.round((Date.now() - this.lastHealthCheck) / 60000)
     };
@@ -288,7 +369,7 @@ class EnhancedBrowserPool {
 }
 
 // Global browser pool instance
-const browserPool = new EnhancedBrowserPool();
+const browserPool = new OptimizedBrowserPool();
 
 // Function to find Chrome executable
 function findChrome() {
@@ -297,7 +378,10 @@ function findChrome() {
     '/usr/bin/google-chrome',
     '/usr/bin/chromium-browser',
     '/usr/bin/chromium',
-    process.env.PUPPETEER_EXECUTABLE_PATH
+    '/snap/bin/chromium',
+    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+    process.env.PUPPETEER_EXECUTABLE_PATH,
+    process.env.CHROME_BIN
   ].filter(Boolean);
 
   for (const path of possiblePaths) {
@@ -311,251 +395,343 @@ function findChrome() {
   return null;
 }
 
-// Enhanced single account scraper function
-async function scrapeSingleAccount(page, username, tweetsPerAccount = 3, scrapeId) {
-  const cleanUsername = username.replace('@', '');
+// ENHANCED SINGLE ACCOUNT SCRAPER WITH ADVANCED TWEET DETECTION
+async function scrapeAccount(page, username, maxTweets = 10, scrapeId) {
+  const cleanUsername = username.replace(/^@/, '');
   const profileURL = `https://x.com/${cleanUsername}`;
   
   try {
-    console.log(`🎯 [${scrapeId}] Scraping @${cleanUsername}...`);
+    console.log(`🎯 [${scrapeId}] Scraping @${cleanUsername} (max: ${maxTweets} tweets)...`);
     
-    const response = await page.goto(profileURL, { 
-      waitUntil: 'networkidle0',
-      timeout: 60000
-    });
-
-    console.log(`✅ [${scrapeId}] Navigation completed, status:`, response?.status());
-
-    // Check if we're redirected to login
-    const currentUrl = page.url();
-    if (currentUrl.includes('/login') || currentUrl.includes('/i/flow/login')) {
-      throw new Error('Redirected to login page - Authentication required');
+    // Navigate with retry logic
+    let navigationAttempts = 0;
+    let response;
+    
+    while (navigationAttempts < 3) {
+      try {
+        response = await page.goto(profileURL, { 
+          waitUntil: 'networkidle2',
+          timeout: 45000
+        });
+        break;
+      } catch (navError) {
+        navigationAttempts++;
+        if (navigationAttempts === 3) throw navError;
+        
+        console.log(`🔄 [${scrapeId}] Navigation attempt ${navigationAttempts} failed, retrying...`);
+        await new Promise(resolve => setTimeout(resolve, 2000));
+      }
     }
 
-    // Wait for tweets to load with multiple strategies
+    console.log(`✅ [${scrapeId}] Navigation completed, status: ${response?.status()}`);
+
+    // Enhanced authentication check
+    const currentUrl = page.url();
+    if (currentUrl.includes('/login') || 
+        currentUrl.includes('/i/flow/login') ||
+        currentUrl.includes('/account/access')) {
+      throw new Error('Authentication required - Redirected to login page');
+    }
+
+    // Check for suspended or protected account
+    const pageContent = await page.content();
+    if (pageContent.includes('Account suspended') || 
+        pageContent.includes('This account is private') ||
+        pageContent.includes('These Tweets are protected')) {
+      throw new Error(`Account @${cleanUsername} is suspended, private, or protected`);
+    }
+
+    // Enhanced tweet loading with multiple selectors
     console.log(`⏳ [${scrapeId}] Waiting for tweets to load...`);
     
-    const selectors = [
+    const tweetSelectors = [
       'article[data-testid="tweet"]',
-      'article',
-      '[data-testid="tweet"]',
-      '[data-testid="tweetText"]'
+      'div[data-testid="tweetText"]',
+      'article[role="article"]',
+      'div[data-testid="tweet"]',
+      '[data-testid="cellInnerDiv"] article'
     ];
     
     let tweetsFound = false;
-    for (const selector of selectors) {
+    let usedSelector = '';
+    
+    for (const selector of tweetSelectors) {
       try {
-        await page.waitForSelector(selector, { timeout: 15000 });
-        console.log(`✅ [${scrapeId}] Found content with selector: ${selector}`);
+        await page.waitForSelector(selector, { timeout: 20000 });
+        console.log(`✅ [${scrapeId}] Found tweets with selector: ${selector}`);
         tweetsFound = true;
+        usedSelector = selector;
         break;
       } catch (e) {
-        console.log(`⏳ [${scrapeId}] Trying next selector...`);
+        console.log(`⏳ [${scrapeId}] Selector "${selector}" failed, trying next...`);
       }
     }
     
     if (!tweetsFound) {
-      const pageContent = await page.content();
-      
-      if (pageContent.includes('Log in to Twitter') || 
-          pageContent.includes('Sign up for Twitter') ||
-          currentUrl.includes('/login')) {
-        throw new Error('Login required - Please check your TWITTER_COOKIES');
-      }
-      
-      if (pageContent.includes('rate limit')) {
+      // Final checks for common issues
+      if (pageContent.includes('rate limit') || pageContent.includes('Rate limit')) {
         throw new Error('Rate limited by Twitter - Please try again later');
       }
       
-      throw new Error(`No tweets found for @${cleanUsername} - Account may be private or protected`);
+      if (pageContent.includes('Something went wrong')) {
+        throw new Error('Twitter returned an error - Please try again');
+      }
+      
+      throw new Error(`No tweets found for @${cleanUsername} - Account may be empty, private, or protected`);
     }
 
-    // Wait for content to stabilize
-    await new Promise(resolve => setTimeout(resolve, 3000));
-
-    // Scroll to top for freshest content
-    console.log(`📍 [${scrapeId}] Scrolling to top for freshest content...`);
-    await page.evaluate(() => window.scrollTo(0, 0));
+    // Wait for content to fully stabilize
+    await new Promise(resolve => setTimeout(resolve, 4000));
+    
+    // Optimized scrolling strategy for fresh content
+    console.log(`📍 [${scrapeId}] Optimizing for fresh content...`);
+    
+    // Scroll to absolute top
+    await page.evaluate(() => {
+      window.scrollTo(0, 0);
+      document.documentElement.scrollTop = 0;
+      document.body.scrollTop = 0;
+    });
     await new Promise(resolve => setTimeout(resolve, 2000));
 
-    // Light scrolling to load more tweets
-    console.log(`🔄 [${scrapeId}] Loading more tweets...`);
-    for (let i = 0; i < 3; i++) {
-      await page.evaluate(() => window.scrollBy(0, window.innerHeight));
-      await new Promise(resolve => setTimeout(resolve, 2000));
+    // Progressive loading with checks
+    for (let scroll = 0; scroll < 5; scroll++) {
+      await page.evaluate(() => window.scrollBy(0, window.innerHeight * 0.8));
+      await new Promise(resolve => setTimeout(resolve, 2500));
+      
+      // Check if we have enough content
+      const articleCount = await page.$$eval('article', articles => articles.length);
+      if (articleCount >= maxTweets + 5) break; // Extra buffer for filtering
     }
     
-    // Go back to top
+    // Return to top for extraction
     await page.evaluate(() => window.scrollTo(0, 0));
     await new Promise(resolve => setTimeout(resolve, 2000));
 
-    // Extract tweets with enhanced pinned detection
-    console.log(`🎯 [${scrapeId}] Extracting tweets...`);
-    const tweets = await page.evaluate((username, tweetsPerAccount, scrapeId) => {
+    // ENHANCED TWEET EXTRACTION with better filtering
+    console.log(`🎯 [${scrapeId}] Extracting tweets with advanced filtering...`);
+    
+    const tweets = await page.evaluate((targetUsername, maxTweets, scrapeId) => {
       const tweetData = [];
-      const articles = document.querySelectorAll('article');
+      const articles = document.querySelectorAll('article[data-testid="tweet"], article[role="article"]');
       const now = new Date();
-      const freshnessDays = 7; // Allow tweets up to 7 days old
-      const cutoffDate = new Date(now.getTime() - (freshnessDays * 24 * 60 * 60 * 1000));
+      const maxAgeDays = 14; // Allow tweets up to 2 weeks old
+      const cutoffDate = new Date(now.getTime() - (maxAgeDays * 24 * 60 * 60 * 1000));
 
-      console.log(`Found ${articles.length} articles to process for ${username}`);
+      console.log(`Processing ${articles.length} articles for @${targetUsername}`);
 
-      for (let i = 0; i < articles.length && tweetData.length < tweetsPerAccount; i++) {
+      for (let i = 0; i < articles.length && tweetData.length < maxTweets; i++) {
         const article = articles[i];
+        
         try {
           // Skip promoted content
-          if (article.querySelector('[data-testid="promotedIndicator"]')) {
+          if (article.querySelector('[data-testid="promotedIndicator"]') || 
+              article.textContent.includes('Promoted') ||
+              article.textContent.includes('Ad')) {
             continue;
           }
 
-          // Enhanced pinned tweet detection
-          const isPinned = (
-            // Direct pin indicators
-            article.querySelector('[data-testid="pin"]') ||
-            article.querySelector('svg[data-testid="pin"]') ||
-            article.querySelector('[aria-label*="Pinned"]') ||
-            article.querySelector('[aria-label*="pinned"]') ||
-            article.querySelector('[data-testid="socialContext"]')?.textContent?.toLowerCase().includes('pinned') ||
+          // ENHANCED PINNED TWEET DETECTION
+          const pinnedIndicators = [
+            // Direct selectors
+            '[data-testid="pin"]',
+            '[data-testid="socialContext"]',
+            'svg[data-testid="pin"]',
+            '[aria-label*="Pinned"]',
+            '[aria-label*="pinned"]',
             
-            // Text-based detection
-            article.textContent.toLowerCase().includes('pinned tweet') ||
-            article.textContent.toLowerCase().includes('pinned') ||
-            article.innerHTML.toLowerCase().includes('pin') ||
+            // Text content checks
+            () => article.textContent.toLowerCase().includes('pinned tweet'),
+            () => article.textContent.toLowerCase().includes('pinned'),
+            () => article.innerHTML.toLowerCase().includes('pin'),
             
-            // Icon-based detection
-            article.querySelector('svg title')?.textContent?.toLowerCase().includes('pin') ||
-            article.querySelector('[role="img"][aria-label*="pin"]') ||
+            // Icon checks
+            () => Array.from(article.querySelectorAll('svg')).some(svg => 
+              svg.innerHTML.includes('M20.235') || // Pin icon path
+              svg.getAttribute('aria-label')?.toLowerCase().includes('pin')
+            ),
             
-            // Parent container checks
-            article.closest('[data-testid*="pin"]') ||
-            article.querySelector('[class*="pin" i]') ||
+            // Social context checks
+            () => {
+              const socialContext = article.querySelector('[data-testid="socialContext"]');
+              return socialContext && (
+                socialContext.textContent.toLowerCase().includes('pinned') ||
+                socialContext.querySelector('svg')
+              );
+            },
             
-            // Social context checks (where pin info usually appears)
-            article.querySelector('[data-testid="socialContext"]')?.querySelector('svg') ||
-            
-            // Additional heuristics for first tweet
-            (i === 0 && (() => {
+            // Age-based heuristic for first tweet
+            () => {
+              if (i > 0) return false; // Only check first tweet
               const timeElement = article.querySelector('time');
               if (!timeElement) return false;
-              const timestamp = timeElement.getAttribute('datetime');
-              if (!timestamp) return false;
-              const tweetAge = now - new Date(timestamp);
-              // If first tweet is more than 7 days old, likely pinned
-              return tweetAge > (7 * 24 * 60 * 60 * 1000);
-            })())
-          );
+              const datetime = timeElement.getAttribute('datetime');
+              if (!datetime) return false;
+              const tweetAge = now - new Date(datetime);
+              return tweetAge > (7 * 24 * 60 * 60 * 1000); // Older than 7 days
+            }
+          ];
+          
+          const isPinned = pinnedIndicators.some(indicator => {
+            if (typeof indicator === 'function') {
+              return indicator();
+            } else {
+              return article.querySelector(indicator);
+            }
+          });
           
           if (isPinned) {
-            console.log(`🔒 [${scrapeId}] Skipping pinned tweet for ${username} at position ${i}`);
+            console.log(`🔒 Skipping pinned tweet at position ${i}`);
             continue;
           }
 
-          // Get tweet text
+          // Extract tweet content
           const textElement = article.querySelector('[data-testid="tweetText"]');
           const text = textElement ? textElement.innerText.trim() : '';
           
-          // Skip tweets without meaningful content
-          if (!text && !article.querySelector('img')) continue;
-          if (text.length < 3) continue;
+          // Skip empty or very short tweets
+          if (!text || text.length < 5) {
+            // Check for media-only tweets
+            const hasMedia = article.querySelector('img[alt*="Image"]') || 
+                            article.querySelector('video') ||
+                            article.querySelector('[data-testid="videoPlayer"]');
+            if (!hasMedia) continue;
+          }
 
-          // Get tweet link and ID
-          const linkElement = article.querySelector('a[href*="/status/"]');
-          if (!linkElement) continue;
+          // Get tweet link and validate
+          const linkElements = article.querySelectorAll('a[href*="/status/"]');
+          let tweetLink = null;
+          let tweetId = null;
           
-          const href = linkElement.getAttribute('href');
-          const link = href.startsWith('http') ? href : 'https://twitter.com' + href;
-          const tweetId = link.match(/status\/(\d+)/)?.[1];
+          for (const linkEl of linkElements) {
+            const href = linkEl.getAttribute('href');
+            if (href && href.includes(targetUsername)) {
+              tweetLink = href.startsWith('http') ? href : 'https://twitter.com' + href;
+              const idMatch = tweetLink.match(/status\/(\d+)/);
+              if (idMatch) {
+                tweetId = idMatch[1];
+                break;
+              }
+            }
+          }
+          
           if (!tweetId) continue;
 
-          // Get timestamp
+          // Extract timestamp with better parsing
           const timeElement = article.querySelector('time');
-          let timestamp = timeElement ? timeElement.getAttribute('datetime') : null;
-          const relativeTime = timeElement ? timeElement.innerText.trim() : '';
-
-          // Parse relative time if no absolute timestamp
-          if (!timestamp && relativeTime) {
-            if (relativeTime.includes('s') || relativeTime.toLowerCase().includes('now')) {
-              timestamp = new Date().toISOString();
-            } else if (relativeTime.includes('m')) {
-              const mins = parseInt(relativeTime) || 1;
-              timestamp = new Date(now.getTime() - mins * 60000).toISOString();
-            } else if (relativeTime.includes('h')) {
-              const hours = parseInt(relativeTime) || 1;
-              timestamp = new Date(now.getTime() - hours * 3600000).toISOString();
-            } else if (relativeTime.includes('d')) {
-              const days = parseInt(relativeTime) || 1;
-              timestamp = new Date(now.getTime() - days * 86400000).toISOString();
+          let timestamp = null;
+          let relativeTime = '';
+          
+          if (timeElement) {
+            timestamp = timeElement.getAttribute('datetime');
+            relativeTime = timeElement.textContent?.trim() || '';
+            
+            // Parse relative time if no absolute timestamp
+            if (!timestamp && relativeTime) {
+              const now = new Date();
+              if (relativeTime.includes('s') || relativeTime.toLowerCase().includes('now')) {
+                timestamp = now.toISOString();
+              } else if (relativeTime.includes('m')) {
+                const mins = parseInt(relativeTime.match(/\d+/)?.[0]) || 1;
+                timestamp = new Date(now.getTime() - mins * 60000).toISOString();
+              } else if (relativeTime.includes('h')) {
+                const hours = parseInt(relativeTime.match(/\d+/)?.[0]) || 1;
+                timestamp = new Date(now.getTime() - hours * 3600000).toISOString();
+              } else if (relativeTime.includes('d')) {
+                const days = parseInt(relativeTime.match(/\d+/)?.[0]) || 1;
+                timestamp = new Date(now.getTime() - days * 86400000).toISOString();
+              }
             }
           }
 
           if (!timestamp) continue;
-          const tweetDate = new Date(timestamp);
-          if (isNaN(tweetDate.getTime()) || tweetDate < cutoffDate) continue;
-
-          // Get user info
-          const userElement = article.querySelector('[data-testid="User-Names"] a, [data-testid="User-Name"] a');
-          let displayName = '';
           
-          const displayNameElement = article.querySelector('[data-testid="User-Names"] span, [data-testid="User-Name"] span');
-          if (displayNameElement) {
-            displayName = displayNameElement.textContent.trim();
+          const tweetDate = new Date(timestamp);
+          if (isNaN(tweetDate.getTime()) || tweetDate < cutoffDate) {
+            continue;
           }
 
-          // Get metrics
+          // Extract user info
+          const userElements = article.querySelectorAll('[data-testid="User-Names"] span, [data-testid="User-Name"] span');
+          let displayName = '';
+          
+          for (const element of userElements) {
+            const text = element.textContent?.trim();
+            if (text && !text.startsWith('@') && text !== targetUsername) {
+              displayName = text;
+              break;
+            }
+          }
+
+          // Extract engagement metrics with better parsing
           const getMetric = (testId) => {
             const element = article.querySelector(`[data-testid="${testId}"]`);
             if (!element) return 0;
-            const text = element.getAttribute('aria-label') || element.textContent || '';
-            const match = text.match(/(\d+(?:,\d+)*)/);
-            return match ? parseInt(match[1].replace(/,/g, '')) : 0;
+            
+            const ariaLabel = element.getAttribute('aria-label') || '';
+            const textContent = element.textContent || '';
+            
+            // Try aria-label first (more reliable)
+            let match = ariaLabel.match(/(\d+(?:,\d+)*)/);
+            if (!match) {
+              // Fallback to text content
+              match = textContent.match(/(\d+(?:,\d+)*)/);
+            }
+            
+            if (match) {
+              const number = match[1].replace(/,/g, '');
+              return parseInt(number) || 0;
+            }
+            
+            return 0;
           };
 
+          // Check for media content
+          const hasImages = article.querySelectorAll('img[alt*="Image"]').length > 0;
+          const hasVideo = article.querySelector('video') || article.querySelector('[data-testid="videoPlayer"]');
+          
           const tweetObj = {
             id: tweetId,
-            username: username.replace('@', ''),
-            displayName: displayName,
-            text,
-            link,
+            username: targetUsername,
+            displayName: displayName || targetUsername,
+            text: text || '[Media Tweet]',
+            link: tweetLink,
             likes: getMetric('like'),
             retweets: getMetric('retweet'),
             replies: getMetric('reply'),
+            views: getMetric('analytics') || 0, // Twitter/X view count
             timestamp,
             relativeTime,
-            scraped_at: new Date().toISOString()
+            hasMedia: hasImages || hasVideo,
+            mediaTypes: {
+              images: hasImages,
+              video: !!hasVideo
+            },
+            scraped_at: new Date().toISOString(),
+            article_position: i
           };
           
           tweetData.push(tweetObj);
-
-        } catch (e) {
-          console.error(`Error processing article ${i}:`, e.message);
+          
+        } catch (articleError) {
+          console.error(`Error processing article ${i}:`, articleError.message);
         }
       }
 
-      // Sort by timestamp (newest first)
-      const sortedTweets = tweetData.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+      // Final sorting and filtering
+      const sortedTweets = tweetData
+        .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
+        .slice(0, maxTweets);
       
-      console.log(`Extracted ${sortedTweets.length} tweets for ${username}`);
+      console.log(`Extracted ${sortedTweets.length} fresh tweets for @${targetUsername}`);
       return sortedTweets;
-    }, cleanUsername, tweetsPerAccount, scrapeId);
-
-    // Filter out very old tweets as final safeguard (configurable freshness)
-    const freshnessDays = process.env.TWEET_FRESHNESS_DAYS || 7; // Default 7 days instead of 1
-    const cutoff = new Date();
-    cutoff.setDate(cutoff.getDate() - freshnessDays);
-
-    const finalTweets = tweets
-      .filter(t => {
-        const tweetAge = new Date() - new Date(t.timestamp);
-        const isOld = tweetAge > (freshnessDays * 24 * 60 * 60 * 1000);
-        return !isOld;
-      })
-      .slice(0, tweetsPerAccount);
+    }, cleanUsername, maxTweets, scrapeId);
 
     return {
       success: true,
       username: cleanUsername,
-      tweets: finalTweets,
-      count: finalTweets.length
+      tweets: tweets,
+      count: tweets.length
     };
 
   } catch (error) {
@@ -570,63 +746,132 @@ async function scrapeSingleAccount(page, username, tweetsPerAccount = 3, scrapeI
   }
 }
 
-// Health check endpoint with enhanced browser stats
+// Health check endpoint
 app.get('/', (req, res) => {
   const chromePath = findChrome();
   const stats = browserPool.getStats();
   
   res.json({ 
-    status: 'Enhanced Twitter Scraper - Multi-Account + Browser Pool + Concurrency Protection', 
+    status: 'Enhanced Twitter Scraper - Optimized for @podha_protocol', 
     chrome: chromePath || 'default',
     browser_pool: stats,
     timestamp: new Date().toISOString(),
-    features: [
-      'Browser Pool Optimization',
-      'Multi-Account Scraping', 
-      'Concurrency Protection',
-      'Enhanced Pinned Tweet Detection',
-      'Rate Limit Protection',
-      'Instance Isolation'
+    optimizations: [
+      'Advanced Pinned Tweet Detection',
+      'Enhanced Content Loading',
+      'Better Error Handling',
+      'Improved Rate Limit Management',
+      'Media Tweet Support',
+      'Multi-format Cookie Support'
     ]
   });
 });
 
-// Manual browser restart endpoint
-app.post('/restart-browser', async (req, res) => {
+// OPTIMIZED SINGLE ACCOUNT ENDPOINT
+app.post('/scrape', async (req, res) => {
+  const searchURL = req.body.url || process.env.TWITTER_SEARCH_URL;
+  const maxTweets = Math.min(req.body.maxTweets || 10, 50); // Cap at 50
+  
+  if (!searchURL) {
+    return res.status(400).json({ error: 'No Twitter URL provided' });
+  }
+
+  // Extract username from URL
+  const usernameMatch = searchURL.match(/(?:twitter\.com|x\.com)\/([^\/\?\s]+)/);
+  if (!usernameMatch) {
+    return res.status(400).json({ error: 'Invalid Twitter/X URL format' });
+  }
+
+  const username = usernameMatch[1];
+  const scrapeId = crypto.randomBytes(6).toString('hex');
+  const startTime = Date.now();
+  
+  let pageId, page;
+  
   try {
-    await browserPool.restart();
-    res.json({ 
-      success: true, 
-      message: 'Browser pool restarted successfully',
-      new_instance_id: browserPool.instanceId,
-      timestamp: new Date().toISOString() 
-    });
+    // Acquire page from pool
+    const pageInfo = await browserPool.acquirePage(scrapeId);
+    pageId = pageInfo.pageId;
+    page = pageInfo.page;
+    
+    console.log(`⚡ [${scrapeId}] Acquired page in ${Date.now() - startTime}ms`);
+    
+    // Scrape the account
+    const result = await scrapeAccount(page, username, maxTweets, scrapeId);
+    
+    if (result.success) {
+      browserPool.incrementSuccess();
+    }
+    
+    const totalTime = Date.now() - startTime;
+    console.log(`🎉 [${scrapeId}] Single account scrape completed in ${totalTime}ms`);
+
+    if (result.success) {
+      res.json({
+        success: true,
+        count: result.count,
+        requested: maxTweets,
+        tweets: result.tweets,
+        scraped_at: new Date().toISOString(),
+        profile_url: searchURL,
+        username: result.username,
+        performance: {
+          total_time_ms: totalTime,
+          browser_reused: true,
+          instance_id: browserPool.instanceId
+        },
+        browser_pool: browserPool.getStats()
+      });
+    } else {
+      res.status(500).json({
+        success: false,
+        error: result.error,
+        username: result.username,
+        profile_url: searchURL,
+        timestamp: new Date().toISOString(),
+        performance: {
+          total_time_ms: totalTime,
+          browser_reused: true
+        }
+      });
+    }
+
   } catch (error) {
+    const totalTime = Date.now() - startTime;
+    console.error(`💥 [${scrapeId}] Single account scraping failed:`, error.message);
+    
     res.status(500).json({ 
       success: false, 
       error: error.message,
-      timestamp: new Date().toISOString() 
+      timestamp: new Date().toISOString(),
+      performance: {
+        total_time_ms: totalTime,
+        browser_reused: true
+      },
+      suggestion: error.message.includes('concurrent scrapes') ? 
+        'Server is busy processing other requests. Please try again in a moment.' :
+        error.message.includes('login') || error.message.includes('Authentication') ? 
+        'Please provide valid Twitter cookies in TWITTER_COOKIES environment variable' :
+        'Twitter might be rate limiting requests. Try again in a few minutes.'
     });
+  } finally {
+    if (pageId && page) {
+      await browserPool.releasePage(pageId, scrapeId);
+    }
   }
 });
 
 // ENHANCED MULTI-ACCOUNT SCRAPER ENDPOINT
 app.post('/scrape-multiple', async (req, res) => {
-  const accounts = req.body.accounts || [
-    'phantom',
-    'elonmusk', 
-    'OpenAI',
-    'sundarpichai',
-    'tim_cook'
-  ];
-  const tweetsPerAccount = req.body.tweetsPerAccount || 3;
+  const accounts = req.body.accounts || ['podha_protocol'];
+  const tweetsPerAccount = Math.min(req.body.tweetsPerAccount || 5, 20); // Cap at 20 per account
   
   if (!Array.isArray(accounts) || accounts.length === 0) {
     return res.status(400).json({ error: 'Accounts array is required' });
   }
 
-  if (accounts.length > 10) {
-    return res.status(400).json({ error: 'Maximum 10 accounts allowed' });
+  if (accounts.length > 15) {
+    return res.status(400).json({ error: 'Maximum 15 accounts allowed' });
   }
 
   const scrapeId = crypto.randomBytes(6).toString('hex');
@@ -643,30 +888,56 @@ app.post('/scrape-multiple', async (req, res) => {
     
     console.log(`⚡ [${scrapeId}] Got page from pool in ${Date.now() - startTime}ms`);
 
-    // Scrape each account
+    // Scrape each account sequentially for better reliability
     const results = [];
     let totalTweets = 0;
+    let successfulAccounts = 0;
 
     for (let i = 0; i < accounts.length; i++) {
       const username = accounts[i];
       console.log(`\n📱 [${scrapeId}] Processing account ${i + 1}/${accounts.length}: @${username}`);
       
-      const result = await scrapeSingleAccount(page, username, tweetsPerAccount, scrapeId);
-      results.push(result);
-      totalTweets += result.count;
-      
-      // Adaptive delay between accounts based on success rate
-      if (i < accounts.length - 1) {
-        const successRate = results.filter(r => r.success).length / results.length;
-        const delay = successRate > 0.8 ? 2000 : 5000; // Longer delay if failures
-        console.log(`⏳ [${scrapeId}] Waiting ${delay}ms before next account...`);
-        await new Promise(resolve => setTimeout(resolve, delay));
+      try {
+        const result = await scrapeAccount(page, username, tweetsPerAccount, scrapeId);
+        results.push(result);
+        
+        if (result.success) {
+          successfulAccounts++;
+          totalTweets += result.count;
+          console.log(`✅ [${scrapeId}] @${username}: ${result.count} tweets scraped`);
+        } else {
+          console.log(`❌ [${scrapeId}] @${username}: ${result.error}`);
+        }
+        
+        // Adaptive delay between accounts
+        if (i < accounts.length - 1) {
+          const successRate = successfulAccounts / (i + 1);
+          const baseDelay = 3000;
+          const delay = successRate > 0.7 ? baseDelay : baseDelay * 2;
+          
+          console.log(`⏳ [${scrapeId}] Waiting ${delay}ms before next account (success rate: ${Math.round(successRate * 100)}%)...`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+        }
+        
+      } catch (accountError) {
+        console.error(`💥 [${scrapeId}] Critical error for @${username}:`, accountError.message);
+        results.push({
+          success: false,
+          username: username.replace('@', ''),
+          error: accountError.message,
+          tweets: [],
+          count: 0
+        });
       }
+    }
+
+    if (successfulAccounts > 0) {
+      browserPool.incrementSuccess();
     }
 
     const totalTime = Date.now() - startTime;
     console.log(`\n🎉 [${scrapeId}] MULTI-ACCOUNT SCRAPING COMPLETED in ${totalTime}ms!`);
-    console.log(`📊 Total tweets scraped: ${totalTweets}`);
+    console.log(`📊 Results: ${successfulAccounts}/${accounts.length} successful, ${totalTweets} total tweets`);
 
     res.json({
       success: true,
@@ -679,14 +950,16 @@ app.post('/scrape-multiple', async (req, res) => {
       performance: {
         total_time_ms: totalTime,
         browser_reused: true,
-        instance_id: browserPool.instanceId
+        instance_id: browserPool.instanceId,
+        avg_time_per_account: Math.round(totalTime / accounts.length)
       },
       browser_pool: browserPool.getStats(),
       summary: {
-        successful_accounts: results.filter(r => r.success).length,
-        failed_accounts: results.filter(r => !r.success).length,
+        successful_accounts: successfulAccounts,
+        failed_accounts: accounts.length - successfulAccounts,
         accounts_with_tweets: results.filter(r => r.count > 0).length,
-        success_rate: `${Math.round((results.filter(r => r.success).length / results.length) * 100)}%`
+        success_rate: `${Math.round((successfulAccounts / accounts.length) * 100)}%`,
+        total_tweets: totalTweets
       }
     });
 
@@ -704,11 +977,11 @@ app.post('/scrape-multiple', async (req, res) => {
         browser_reused: true,
         instance_id: browserPool.instanceId
       },
-      suggestion: error.message.includes('concurrent scrapes') ? 
-        'Another scraping operation is in progress. Please try again in a moment.' :
+      suggestion: error.message.includes('concurrent scrapes') || error.message.includes('busy') ? 
+        'Server is busy processing other requests. Please try again in a moment.' :
         error.message.includes('login') || error.message.includes('Authentication') ? 
         'Please provide valid Twitter cookies in TWITTER_COOKIES environment variable' :
-        'Twitter might be rate limiting or blocking requests. Try again in a few minutes.'
+        'Twitter might be rate limiting requests. Try again in a few minutes.'
     });
   } finally {
     // Return page to pool
@@ -718,163 +991,235 @@ app.post('/scrape-multiple', async (req, res) => {
   }
 });
 
-// OPTIMIZED SINGLE ACCOUNT ENDPOINT
-app.post('/scrape', async (req, res) => {
-  const searchURL = req.body.url || process.env.TWITTER_SEARCH_URL;
-  const maxTweets = req.body.maxTweets || 10;
-  
-  if (!searchURL) {
-    return res.status(400).json({ error: 'No Twitter URL provided' });
-  }
-
-  // Extract username from URL
-  const usernameMatch = searchURL.match(/x\.com\/([^\/\?]+)/);
-  if (!usernameMatch) {
-    return res.status(400).json({ error: 'Invalid Twitter URL format' });
-  }
-
-  const username = usernameMatch[1];
-  
-  // Use multi-account endpoint with single account for consistency
-  const multiReq = {
-    body: {
-      accounts: [username],
-      tweetsPerAccount: maxTweets
-    }
-  };
-
-  return new Promise((resolve) => {
-    const originalJson = res.json;
-    res.json = (data) => {
-      // Transform multi-account response to single-account format
-      if (data.success && data.results && data.results[0]) {
-        const result = data.results[0];
-        const singleResponse = {
-          success: true,
-          count: result.count,
-          requested: maxTweets,
-          tweets: result.tweets,
-          scraped_at: data.scraped_at,
-          profile_url: searchURL,
-          performance: data.performance,
-          browser_pool: data.browser_pool
-        };
-        resolve();
-        return originalJson.call(res, singleResponse);
-      } else {
-        resolve();
-        return originalJson.call(res, data);
-      }
-    };
-    
-    // Forward to multi-account endpoint
-    app.handle({ ...req, ...multiReq, url: '/scrape-multiple', method: 'POST' }, res);
-  });
-});
-
-// User-friendly endpoint
+// SIMPLIFIED USER ENDPOINT
 app.post('/scrape-user', async (req, res) => {
   const username = req.body.username;
-  const maxTweets = req.body.maxTweets || 10;
+  const maxTweets = Math.min(req.body.maxTweets || 10, 30);
   
   if (!username) {
     return res.status(400).json({ error: 'Username is required' });
   }
   
   const cleanUsername = username.replace(/^@/, '');
-  const profileURL = `https://x.com/${cleanUsername}`;
   
-  console.log(`🎯 Scraping user: @${cleanUsername}`);
-  
-  // Forward to single account endpoint
-  req.body.url = profileURL;
-  req.body.maxTweets = maxTweets;
-  
-  return new Promise((resolve) => {
-    const originalJson = res.json;
-    res.json = (data) => {
-      resolve();
-      return originalJson.call(res, data);
-    };
-    
-    // Call scrape endpoint
-    app.handle({ ...req, url: '/scrape', method: 'POST' }, res);
-  });
+  // Use multi-account endpoint for consistency
+  const forwardReq = {
+    ...req,
+    body: {
+      accounts: [cleanUsername],
+      tweetsPerAccount: maxTweets
+    },
+    url: '/scrape-multiple',
+    method: 'POST'
+  };
+
+  // Transform response to single-user format
+  const originalSend = res.json;
+  res.json = function(data) {
+    if (data.success && data.results && data.results[0]) {
+      const result = data.results[0];
+      return originalSend.call(this, {
+        success: result.success,
+        username: result.username,
+        count: result.count,
+        tweets: result.tweets,
+        error: result.error,
+        scraped_at: data.scraped_at,
+        performance: data.performance,
+        browser_pool: data.browser_pool
+      });
+    }
+    return originalSend.call(this, data);
+  };
+
+  // Forward to multi-account handler
+  return app._router.handle(forwardReq, res, () => {});
 });
 
-// BATCH PROCESSING ENDPOINT - For handling large lists efficiently
+// SPECIAL ENDPOINT FOR PODHA_PROTOCOL
+app.post('/scrape-podha', async (req, res) => {
+  const maxTweets = Math.min(req.body.maxTweets || 15, 50);
+  const scrapeId = crypto.randomBytes(6).toString('hex');
+  const startTime = Date.now();
+  
+  console.log(`🎯 [${scrapeId}] SPECIALIZED PODHA_PROTOCOL SCRAPE - Max tweets: ${maxTweets}`);
+
+  let pageId, page;
+  
+  try {
+    const pageInfo = await browserPool.acquirePage(scrapeId);
+    pageId = pageInfo.pageId;
+    page = pageInfo.page;
+    
+    // Enhanced configuration specifically for crypto/protocol accounts
+    await page.setExtraHTTPHeaders({
+      ...await page.extraHTTPHeaders(),
+      'Accept-Encoding': 'gzip, deflate, br',
+      'Sec-Ch-Ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+      'Sec-Ch-Ua-Mobile': '?0',
+      'Sec-Ch-Ua-Platform': '"Windows"'
+    });
+    
+    const result = await scrapeAccount(page, 'podha_protocol', maxTweets, scrapeId);
+    
+    if (result.success) {
+      browserPool.incrementSuccess();
+      
+      // Additional processing for crypto content
+      const enhancedTweets = result.tweets.map(tweet => ({
+        ...tweet,
+        // Flag potential crypto-related content
+        categories: {
+          hasPrice: /\$\d+|\$[A-Z]+|\d+\.\d+\s*USD/i.test(tweet.text),
+          hasChart: /chart|graph|price|pump|dump|moon/i.test(tweet.text),
+          hasAnnouncement: /announce|launch|release|update|new/i.test(tweet.text),
+          hasCommunity: /community|team|join|follow|discord|telegram/i.test(tweet.text)
+        },
+        engagement_score: tweet.likes + (tweet.retweets * 2) + tweet.replies // Weighted engagement
+      }));
+      
+      const totalTime = Date.now() - startTime;
+      
+      res.json({
+        success: true,
+        account: 'podha_protocol',
+        count: result.count,
+        requested: maxTweets,
+        tweets: enhancedTweets,
+        scraped_at: new Date().toISOString(),
+        performance: {
+          total_time_ms: totalTime,
+          browser_reused: true,
+          instance_id: browserPool.instanceId
+        },
+        analytics: {
+          avg_engagement: enhancedTweets.length > 0 ? 
+            Math.round(enhancedTweets.reduce((sum, t) => sum + t.engagement_score, 0) / enhancedTweets.length) : 0,
+          most_liked: enhancedTweets.length > 0 ? 
+            enhancedTweets.reduce((max, t) => t.likes > max.likes ? t : max) : null,
+          content_categories: {
+            price_related: enhancedTweets.filter(t => t.categories.hasPrice).length,
+            announcements: enhancedTweets.filter(t => t.categories.hasAnnouncement).length,
+            community: enhancedTweets.filter(t => t.categories.hasCommunity).length
+          }
+        },
+        browser_pool: browserPool.getStats()
+      });
+      
+    } else {
+      throw new Error(result.error);
+    }
+
+  } catch (error) {
+    const totalTime = Date.now() - startTime;
+    console.error(`💥 [${scrapeId}] PODHA_PROTOCOL scraping failed:`, error.message);
+    
+    res.status(500).json({ 
+      success: false, 
+      account: 'podha_protocol',
+      error: error.message,
+      timestamp: new Date().toISOString(),
+      performance: {
+        total_time_ms: totalTime,
+        browser_reused: true
+      },
+      suggestion: 'If this persists, try using /scrape-user endpoint with username "podha_protocol"'
+    });
+  } finally {
+    if (pageId && page) {
+      await browserPool.releasePage(pageId, scrapeId);
+    }
+  }
+});
+
+// BATCH PROCESSING ENDPOINT
 app.post('/scrape-batch', async (req, res) => {
   const accounts = req.body.accounts || [];
-  const tweetsPerAccount = req.body.tweetsPerAccount || 3;
-  const batchSize = req.body.batchSize || 5; // Process in batches to avoid overwhelming
+  const tweetsPerAccount = Math.min(req.body.tweetsPerAccount || 3, 15);
+  const batchSize = Math.min(req.body.batchSize || 5, 8);
   
   if (!Array.isArray(accounts) || accounts.length === 0) {
     return res.status(400).json({ error: 'Accounts array is required' });
   }
 
-  if (accounts.length > 50) {
-    return res.status(400).json({ error: 'Maximum 50 accounts allowed for batch processing' });
+  if (accounts.length > 100) {
+    return res.status(400).json({ error: 'Maximum 100 accounts allowed for batch processing' });
   }
 
   const batchId = crypto.randomBytes(8).toString('hex');
   const startTime = Date.now();
   
-  console.log(`\n🔄 [${batchId}] Starting batch processing of ${accounts.length} accounts in batches of ${batchSize}`);
+  console.log(`\n🔄 [${batchId}] Batch processing ${accounts.length} accounts (${batchSize} per batch)`);
 
   try {
     const allResults = [];
     let totalTweets = 0;
     let totalSuccessful = 0;
 
-    // Process in batches to manage resources
+    // Process in smaller batches to manage resources
     for (let i = 0; i < accounts.length; i += batchSize) {
       const batch = accounts.slice(i, i + batchSize);
       const batchNum = Math.floor(i / batchSize) + 1;
       const totalBatches = Math.ceil(accounts.length / batchSize);
       
-      console.log(`\n📦 [${batchId}] Processing batch ${batchNum}/${totalBatches}: ${batch.join(', ')}`);
+      console.log(`\n📦 [${batchId}] Batch ${batchNum}/${totalBatches}: [${batch.join(', ')}]`);
 
       try {
-        // Use multi-account endpoint for this batch
-        const batchResponse = await new Promise((resolve, reject) => {
-          const mockReq = {
-            body: {
-              accounts: batch,
-              tweetsPerAccount: tweetsPerAccount
+        // Create internal request for this batch
+        const batchReq = {
+          body: {
+            accounts: batch,
+            tweetsPerAccount: tweetsPerAccount
+          }
+        };
+        
+        const batchRes = {
+          json: () => {},
+          status: () => ({ json: () => {} })
+        };
+
+        // Simulate internal request to multi-account endpoint
+        let batchResult = null;
+        let batchError = null;
+        
+        const pageInfo = await browserPool.acquirePage(`${batchId}-batch${batchNum}`);
+        const { pageId: batchPageId, page: batchPage } = pageInfo;
+        
+        try {
+          for (const account of batch) {
+            const accountResult = await scrapeAccount(batchPage, account, tweetsPerAccount, `${batchId}-${account}`);
+            allResults.push(accountResult);
+            
+            if (accountResult.success) {
+              totalSuccessful++;
+              totalTweets += accountResult.count;
             }
-          };
-          
-          const mockRes = {
-            json: (data) => resolve(data),
-            status: (code) => ({
-              json: (data) => reject(new Error(`HTTP ${code}: ${data.error || 'Unknown error'}`))
-            })
-          };
-
-          app.handle({ ...mockReq, url: '/scrape-multiple', method: 'POST' }, mockRes);
-        });
-
-        if (batchResponse.success) {
-          allResults.push(...batchResponse.results);
-          totalTweets += batchResponse.total_tweets;
-          totalSuccessful += batchResponse.summary.successful_accounts;
+            
+            // Small delay between accounts in batch
+            if (batch.indexOf(account) < batch.length - 1) {
+              await new Promise(resolve => setTimeout(resolve, 2000));
+            }
+          }
+        } finally {
+          await browserPool.releasePage(batchPageId, `${batchId}-batch${batchNum}`);
         }
 
-        // Longer delay between batches to prevent rate limiting
+        // Longer delay between batches
         if (i + batchSize < accounts.length) {
-          const delay = 10000; // 10 second delay between batches
-          console.log(`⏳ [${batchId}] Waiting ${delay/1000}s before next batch...`);
+          const delay = 8000; // 8 second delay between batches
+          console.log(`⏳ [${batchId}] Batch delay: ${delay/1000}s...`);
           await new Promise(resolve => setTimeout(resolve, delay));
         }
 
       } catch (batchError) {
         console.error(`❌ [${batchId}] Batch ${batchNum} failed:`, batchError.message);
-        // Add failed results for this batch
+        
+        // Add failed results for remaining accounts in this batch
         batch.forEach(username => {
           allResults.push({
             success: false,
             username: username.replace('@', ''),
-            error: `Batch processing failed: ${batchError.message}`,
+            error: `Batch error: ${batchError.message}`,
             tweets: [],
             count: 0
           });
@@ -883,8 +1228,8 @@ app.post('/scrape-batch', async (req, res) => {
     }
 
     const totalTime = Date.now() - startTime;
-    console.log(`\n🎉 [${batchId}] BATCH PROCESSING COMPLETED in ${totalTime}ms!`);
-    console.log(`📊 Total results: ${allResults.length}, Successful: ${totalSuccessful}, Tweets: ${totalTweets}`);
+    console.log(`\n🎉 [${batchId}] BATCH PROCESSING COMPLETED!`);
+    console.log(`📊 Final: ${totalSuccessful}/${accounts.length} successful, ${totalTweets} tweets in ${totalTime}ms`);
 
     res.json({
       success: true,
@@ -898,6 +1243,7 @@ app.post('/scrape-batch', async (req, res) => {
       performance: {
         total_time_ms: totalTime,
         batches_processed: Math.ceil(accounts.length / batchSize),
+        avg_time_per_account: Math.round(totalTime / accounts.length),
         instance_id: browserPool.instanceId
       },
       summary: {
@@ -925,7 +1271,29 @@ app.post('/scrape-batch', async (req, res) => {
   }
 });
 
-// STATS ENDPOINT - Get detailed browser and performance stats
+// MANUAL BROWSER RESTART
+app.post('/restart-browser', async (req, res) => {
+  try {
+    const oldInstanceId = browserPool.instanceId;
+    await browserPool.restart();
+    
+    res.json({ 
+      success: true, 
+      message: 'Browser pool restarted successfully',
+      old_instance_id: oldInstanceId,
+      new_instance_id: browserPool.instanceId,
+      timestamp: new Date().toISOString() 
+    });
+  } catch (error) {
+    res.status(500).json({ 
+      success: false, 
+      error: error.message,
+      timestamp: new Date().toISOString() 
+    });
+  }
+});
+
+// DETAILED STATS ENDPOINT
 app.get('/stats', (req, res) => {
   const stats = browserPool.getStats();
   const uptime = process.uptime();
@@ -942,12 +1310,16 @@ app.get('/stats', (req, res) => {
         external: Math.round(memUsage.external / 1024 / 1024)
       },
       node_version: process.version,
-      platform: process.platform,
-      arch: process.arch
+      platform: process.platform
     },
     browser_pool: stats,
     chrome_path: findChrome() || 'default',
     cookies_configured: !!process.env.TWITTER_COOKIES,
+    environment: {
+      twitter_cookies: !!process.env.TWITTER_COOKIES,
+      tweet_freshness_days: process.env.TWEET_FRESHNESS_DAYS || '14 (default)',
+      port: PORT
+    },
     timestamp: new Date().toISOString()
   });
 });
@@ -955,43 +1327,59 @@ app.get('/stats', (req, res) => {
 // Initialize browser pool on startup
 async function startServer() {
   try {
-    console.log('🔥 Initializing enhanced browser pool...');
+    console.log('🔥 Initializing optimized browser pool...');
     await browserPool.initialize();
     
     app.listen(PORT, '0.0.0.0', () => {
-      console.log(`🚀 Enhanced Twitter Scraper API running on port ${PORT}`);
-      console.log(`🔍 Chrome executable:`, findChrome() || 'default');
-      console.log(`🍪 Cookies configured:`, !!process.env.TWITTER_COOKIES);
-      console.log(`🔥 Browser pool ready with instance ID: ${browserPool.instanceId}`);
-      console.log(`⚡ Features: Browser Pool + Multi-Account + Concurrency Protection`);
-      console.log(`📊 Max concurrent scrapes: ${browserPool.maxConcurrentScrapes}`);
-      console.log(`📄 Max pages: ${browserPool.maxPages}`);
-      console.log(`\n📡 Available Endpoints:`);
-      console.log(`  GET  /          - Health check & status`);
-      console.log(`  GET  /stats     - Detailed server & browser stats`);
-      console.log(`  POST /scrape    - Single account scraping`);
-      console.log(`  POST /scrape-user - User-friendly single account`);
-      console.log(`  POST /scrape-multiple - Multi-account scraping (up to 10)`);
-      console.log(`  POST /scrape-batch    - Batch processing (up to 50)`);
-      console.log(`  POST /restart-browser - Restart browser pool`);
+      console.log(`\n🚀 Enhanced Twitter Scraper API running on port ${PORT}`);
+      console.log(`🎯 Optimized for @podha_protocol and crypto accounts`);
+      console.log(`🔍 Chrome: ${findChrome() || 'default'}`);
+      console.log(`🍪 Cookies: ${!!process.env.TWITTER_COOKIES ? 'Configured' : 'Not configured'}`);
+      console.log(`🔥 Browser Pool ID: ${browserPool.instanceId}`);
+      console.log(`📊 Limits: ${browserPool.maxConcurrentScrapes} concurrent, ${browserPool.maxPages} pages`);
+      
+      console.log(`\n📡 API Endpoints:`);
+      console.log(`  GET  /                    - Health check & status`);
+      console.log(`  GET  /stats               - Detailed server stats`);
+      console.log(`  POST /scrape              - Single account (URL)`);
+      console.log(`  POST /scrape-user         - Single account (username)`);
+      console.log(`  POST /scrape-podha        - Optimized for podha_protocol`);
+      console.log(`  POST /scrape-multiple     - Multi-account (up to 15)`);
+      console.log(`  POST /scrape-batch        - Batch processing (up to 100)`);
+      console.log(`  POST /restart-browser     - Restart browser pool`);
+      
+      console.log(`\n🎯 Quick Start for podha_protocol:`);
+      console.log(`  curl -X POST http://localhost:${PORT}/scrape-podha -H "Content-Type: application/json" -d '{"maxTweets": 10}'`);
+      console.log(`  curl -X POST http://localhost:${PORT}/scrape-user -H "Content-Type: application/json" -d '{"username": "podha_protocol", "maxTweets": 10}'`);
     });
+    
   } catch (error) {
     console.error('💥 Failed to start server:', error.message);
     process.exit(1);
   }
 }
 
-// Graceful shutdown with cleanup
+// Enhanced graceful shutdown
 async function gracefulShutdown(signal) {
   console.log(`\n${signal} received, shutting down gracefully...`);
   
   try {
+    // Wait for active scrapes to complete (up to 30 seconds)
+    if (browserPool.activeScrapes.size > 0) {
+      console.log(`⏳ Waiting for ${browserPool.activeScrapes.size} active scrapes to complete...`);
+      let waitTime = 0;
+      while (browserPool.activeScrapes.size > 0 && waitTime < 30000) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        waitTime += 1000;
+      }
+    }
+    
     if (browserPool.browser) {
       console.log('🔒 Closing browser...');
       await browserPool.browser.close();
     }
     
-    console.log('✅ Cleanup completed');
+    console.log('✅ Shutdown completed gracefully');
     process.exit(0);
   } catch (error) {
     console.error('❌ Error during shutdown:', error.message);
@@ -999,19 +1387,19 @@ async function gracefulShutdown(signal) {
   }
 }
 
-// Handle various shutdown signals
+// Signal handlers
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
-process.on('SIGUSR2', () => gracefulShutdown('SIGUSR2')); // Nodemon restart
+process.on('SIGUSR2', () => gracefulShutdown('SIGUSR2'));
 
-// Handle uncaught exceptions
+// Error handlers
 process.on('uncaughtException', (error) => {
   console.error('💥 Uncaught Exception:', error);
   gracefulShutdown('UNCAUGHT_EXCEPTION');
 });
 
 process.on('unhandledRejection', (reason, promise) => {
-  console.error('💥 Unhandled Rejection at:', promise, 'reason:', reason);
+  console.error('💥 Unhandled Rejection:', reason);
   gracefulShutdown('UNHANDLED_REJECTION');
 });
 
