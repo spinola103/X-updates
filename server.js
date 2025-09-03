@@ -311,13 +311,43 @@ function findChrome() {
   return null;
 }
 
-// Enhanced single account scraper function
+// Add function to check and refresh cookies
+async function checkAndRefreshCookies(page, scrapeId) {
+  try {
+    // Check if we can access a protected endpoint
+    const testResponse = await page.goto('https://x.com/home', { 
+      waitUntil: 'domcontentloaded',
+      timeout: 10000 
+    });
+    
+    const url = page.url();
+    if (url.includes('/login') || url.includes('/i/flow/login')) {
+      console.log(`🔄 [${scrapeId}] Cookies expired, attempting to refresh...`);
+      
+      // Try to reload cookies
+      if (process.env.TWITTER_COOKIES) {
+        const cookies = JSON.parse(process.env.TWITTER_COOKIES);
+        await page.setCookie(...cookies);
+        console.log(`✅ [${scrapeId}] Cookies refreshed`);
+      } else {
+        throw new Error('No cookies available to refresh');
+      }
+    }
+  } catch (error) {
+    console.warn(`⚠️ [${scrapeId}] Cookie check failed:`, error.message);
+  }
+}
+
+// Enhanced single account scraper function with better error detection
 async function scrapeSingleAccount(page, username, tweetsPerAccount = 3, scrapeId) {
   const cleanUsername = username.replace('@', '');
   const profileURL = `https://x.com/${cleanUsername}`;
   
   try {
     console.log(`🎯 [${scrapeId}] Scraping @${cleanUsername}...`);
+    
+    // Check if cookies are still valid before scraping
+    await checkAndRefreshCookies(page, scrapeId);
     
     const response = await page.goto(profileURL, { 
       waitUntil: 'networkidle0',
@@ -326,10 +356,35 @@ async function scrapeSingleAccount(page, username, tweetsPerAccount = 3, scrapeI
 
     console.log(`✅ [${scrapeId}] Navigation completed, status:`, response?.status());
 
-    // Check if we're redirected to login
+    // Enhanced login detection
     const currentUrl = page.url();
-    if (currentUrl.includes('/login') || currentUrl.includes('/i/flow/login')) {
+    if (currentUrl.includes('/login') || 
+        currentUrl.includes('/i/flow/login') ||
+        currentUrl.includes('/i/flow/signup')) {
       throw new Error('Redirected to login page - Authentication required');
+    }
+
+    // Check for rate limiting or suspended accounts
+    const pageContent = await page.content();
+    
+    if (pageContent.includes('rate limit') || 
+        pageContent.includes('Rate limit exceeded')) {
+      throw new Error('Rate limited by Twitter - Please try again later');
+    }
+    
+    if (pageContent.includes('Account suspended') ||
+        pageContent.includes('This account has been suspended')) {
+      throw new Error(`Account @${cleanUsername} is suspended`);
+    }
+    
+    if (pageContent.includes('This account doesn\'t exist') ||
+        pageContent.includes('Sorry, that page doesn\'t exist')) {
+      throw new Error(`Account @${cleanUsername} doesn't exist`);
+    }
+
+    if (pageContent.includes('This account\'s Tweets are protected') ||
+        pageContent.includes('These Tweets are protected')) {
+      throw new Error(`Account @${cleanUsername} is private/protected`);
     }
 
     // Wait for tweets to load with multiple strategies
@@ -337,9 +392,10 @@ async function scrapeSingleAccount(page, username, tweetsPerAccount = 3, scrapeI
     
     const selectors = [
       'article[data-testid="tweet"]',
+      'article[data-testid="tweetText"]', 
+      'div[data-testid="tweetText"]',
       'article',
-      '[data-testid="tweet"]',
-      '[data-testid="tweetText"]'
+      '[data-testid="tweet"]'
     ];
     
     let tweetsFound = false;
@@ -355,19 +411,20 @@ async function scrapeSingleAccount(page, username, tweetsPerAccount = 3, scrapeI
     }
     
     if (!tweetsFound) {
-      const pageContent = await page.content();
-      
+      // Enhanced content analysis
       if (pageContent.includes('Log in to Twitter') || 
           pageContent.includes('Sign up for Twitter') ||
-          currentUrl.includes('/login')) {
+          pageContent.includes('Sign up for X') ||
+          pageContent.includes('Log in to X')) {
         throw new Error('Login required - Please check your TWITTER_COOKIES');
       }
       
-      if (pageContent.includes('rate limit')) {
-        throw new Error('Rate limited by Twitter - Please try again later');
+      // Check if we're on the profile but tweets aren't loading
+      if (pageContent.includes(cleanUsername) || currentUrl.includes(cleanUsername)) {
+        throw new Error(`Profile loaded but no tweets found for @${cleanUsername} - May be rate limited or require authentication`);
       }
       
-      throw new Error(`No tweets found for @${cleanUsername} - Account may be private or protected`);
+      throw new Error(`Cannot access @${cleanUsername} - Account may not exist, be private, or require authentication`);
     }
 
     // Wait for content to stabilize
@@ -389,13 +446,13 @@ async function scrapeSingleAccount(page, username, tweetsPerAccount = 3, scrapeI
     await page.evaluate(() => window.scrollTo(0, 0));
     await new Promise(resolve => setTimeout(resolve, 2000));
 
-    // Extract tweets with enhanced pinned detection
+    // Extract tweets with improved detection
     console.log(`🎯 [${scrapeId}] Extracting tweets...`);
     const tweets = await page.evaluate((username, tweetsPerAccount, scrapeId) => {
       const tweetData = [];
       const articles = document.querySelectorAll('article');
       const now = new Date();
-      const freshnessDays = 7; // Allow tweets up to 7 days old
+      const freshnessDays = 7;
       const cutoffDate = new Date(now.getTime() - (freshnessDays * 24 * 60 * 60 * 1000));
 
       console.log(`Found ${articles.length} articles to process for ${username}`);
@@ -408,41 +465,12 @@ async function scrapeSingleAccount(page, username, tweetsPerAccount = 3, scrapeI
             continue;
           }
 
-          // Enhanced pinned tweet detection
+          // Improved pinned tweet detection - less aggressive
           const isPinned = (
-            // Direct pin indicators
             article.querySelector('[data-testid="pin"]') ||
             article.querySelector('svg[data-testid="pin"]') ||
             article.querySelector('[aria-label*="Pinned"]') ||
-            article.querySelector('[aria-label*="pinned"]') ||
-            article.querySelector('[data-testid="socialContext"]')?.textContent?.toLowerCase().includes('pinned') ||
-            
-            // Text-based detection
-            article.textContent.toLowerCase().includes('pinned tweet') ||
-            article.textContent.toLowerCase().includes('pinned') ||
-            article.innerHTML.toLowerCase().includes('pin') ||
-            
-            // Icon-based detection
-            article.querySelector('svg title')?.textContent?.toLowerCase().includes('pin') ||
-            article.querySelector('[role="img"][aria-label*="pin"]') ||
-            
-            // Parent container checks
-            article.closest('[data-testid*="pin"]') ||
-            article.querySelector('[class*="pin" i]') ||
-            
-            // Social context checks (where pin info usually appears)
-            article.querySelector('[data-testid="socialContext"]')?.querySelector('svg') ||
-            
-            // Additional heuristics for first tweet
-            (i === 0 && (() => {
-              const timeElement = article.querySelector('time');
-              if (!timeElement) return false;
-              const timestamp = timeElement.getAttribute('datetime');
-              if (!timestamp) return false;
-              const tweetAge = now - new Date(timestamp);
-              // If first tweet is more than 7 days old, likely pinned
-              return tweetAge > (7 * 24 * 60 * 60 * 1000);
-            })())
+            article.querySelector('[data-testid="socialContext"]')?.textContent?.toLowerCase().includes('pinned')
           );
           
           if (isPinned) {
@@ -450,24 +478,37 @@ async function scrapeSingleAccount(page, username, tweetsPerAccount = 3, scrapeI
             continue;
           }
 
-          // Get tweet text
-          const textElement = article.querySelector('[data-testid="tweetText"]');
-          const text = textElement ? textElement.innerText.trim() : '';
+          // Get tweet text with multiple selectors
+          let text = '';
+          const textSelectors = [
+            '[data-testid="tweetText"]',
+            '.tweet-text',
+            '[lang]' // Twitter uses lang attributes on tweet text
+          ];
+          
+          for (const selector of textSelectors) {
+            const textElement = article.querySelector(selector);
+            if (textElement && textElement.innerText.trim()) {
+              text = textElement.innerText.trim();
+              break;
+            }
+          }
           
           // Skip tweets without meaningful content
           if (!text && !article.querySelector('img')) continue;
           if (text.length < 3) continue;
 
-          // Get tweet link and ID
-          const linkElement = article.querySelector('a[href*="/status/"]');
+          // Get tweet link and ID with better detection
+          const linkElement = article.querySelector('a[href*="/status/"]') || 
+                             article.querySelector('time')?.closest('a');
           if (!linkElement) continue;
           
           const href = linkElement.getAttribute('href');
-          const link = href.startsWith('http') ? href : 'https://twitter.com' + href;
+          const link = href.startsWith('http') ? href : 'https://x.com' + href;
           const tweetId = link.match(/status\/(\d+)/)?.[1];
           if (!tweetId) continue;
 
-          // Get timestamp
+          // Get timestamp with improved parsing
           const timeElement = article.querySelector('time');
           let timestamp = timeElement ? timeElement.getAttribute('datetime') : null;
           const relativeTime = timeElement ? timeElement.innerText.trim() : '';
@@ -490,18 +531,25 @@ async function scrapeSingleAccount(page, username, tweetsPerAccount = 3, scrapeI
 
           if (!timestamp) continue;
           const tweetDate = new Date(timestamp);
-          if (isNaN(tweetDate.getTime()) || tweetDate < cutoffDate) continue;
+          if (isNaN(tweetDate.getTime())) continue;
 
-          // Get user info
-          const userElement = article.querySelector('[data-testid="User-Names"] a, [data-testid="User-Name"] a');
+          // Get user info with multiple selectors
           let displayName = '';
+          const nameSelectors = [
+            '[data-testid="User-Names"] span:first-child',
+            '[data-testid="User-Name"] span',
+            '[data-testid="UserName"] span'
+          ];
           
-          const displayNameElement = article.querySelector('[data-testid="User-Names"] span, [data-testid="User-Name"] span');
-          if (displayNameElement) {
-            displayName = displayNameElement.textContent.trim();
+          for (const selector of nameSelectors) {
+            const nameElement = article.querySelector(selector);
+            if (nameElement && nameElement.textContent.trim()) {
+              displayName = nameElement.textContent.trim();
+              break;
+            }
           }
 
-          // Get metrics
+          // Get metrics with improved detection
           const getMetric = (testId) => {
             const element = article.querySelector(`[data-testid="${testId}"]`);
             if (!element) return 0;
@@ -513,7 +561,7 @@ async function scrapeSingleAccount(page, username, tweetsPerAccount = 3, scrapeI
           const tweetObj = {
             id: tweetId,
             username: username.replace('@', ''),
-            displayName: displayName,
+            displayName: displayName || username,
             text,
             link,
             likes: getMetric('like'),
@@ -538,24 +586,31 @@ async function scrapeSingleAccount(page, username, tweetsPerAccount = 3, scrapeI
       return sortedTweets;
     }, cleanUsername, tweetsPerAccount, scrapeId);
 
-    // Filter out very old tweets as final safeguard (configurable freshness)
-    const freshnessDays = process.env.TWEET_FRESHNESS_DAYS || 7; // Default 7 days instead of 1
+    // Filter tweets by freshness
+    const freshnessDays = process.env.TWEET_FRESHNESS_DAYS || 7;
     const cutoff = new Date();
     cutoff.setDate(cutoff.getDate() - freshnessDays);
 
     const finalTweets = tweets
       .filter(t => {
-        const tweetAge = new Date() - new Date(t.timestamp);
-        const isOld = tweetAge > (freshnessDays * 24 * 60 * 60 * 1000);
-        return !isOld;
+        const tweetDate = new Date(t.timestamp);
+        return tweetDate > cutoff;
       })
       .slice(0, tweetsPerAccount);
 
+    // Determine if scraping was truly successful
+    const isSuccess = finalTweets.length > 0;
+    
+    if (!isSuccess) {
+      console.warn(`⚠️ [${scrapeId}] No valid tweets found for @${cleanUsername}`);
+    }
+
     return {
-      success: true,
+      success: isSuccess, // Only true if we actually got tweets
       username: cleanUsername,
       tweets: finalTweets,
-      count: finalTweets.length
+      count: finalTweets.length,
+      ...(isSuccess ? {} : { warning: 'No recent tweets found - account may be inactive, rate limited, or require authentication' })
     };
 
   } catch (error) {
